@@ -4,103 +4,146 @@ Require Import Coq.Arith.Arith.
 Require Import Coq.Arith.EqNat.
 Require Import Coq.omega.Omega.
 Require Import Coq.Lists.List.
+Require Import Coq.Strings.String.
+Require Import Psatz.
 Import ListNotations.
 
 From PLF Require Import Maps.
 
+Inductive val : Type :=
+| val_bool: bool -> val
+| val_nat: nat -> val
+| val_listnat : list nat -> val
+| val_fun: string -> trm -> val
+| val_fix: string -> string -> trm -> val
+| val_tuple: list val -> val
+with trm : Type :=
+| trm_val : val -> trm
+| trm_var : string -> trm
+| trm_tuple: list trm -> trm
+| trm_app : trm -> trm -> trm
+| trm_let : string -> trm -> trm -> trm
+| trm_if : trm -> trm -> trm -> trm
+| trm_cons: trm -> trm -> trm
+| trm_match_list: trm -> trm -> (string * string * trm) -> trm.
 
-Inductive nexp : Type :=
-| Num: nat -> nexp
-| Hd: lexp -> nexp
-| Nid: string -> nexp
-with lexp : Type :=
-| NumList : list nat -> lexp
-| Nil: lexp
-| Cons: nexp -> lexp -> lexp
-| Tail: lexp -> lexp
-| Lid: string -> lexp.
-Inductive bexp : Type :=
-| BTrue
-| BFalse
-| Bemp (a: lexp)
-| BEq (a1 a2 : nexp)
-| BLt (a1 a2 : nexp)
-| BNot (b : bexp)
-| BAnd (b1 b2 : bexp).
+Coercion val_bool : bool >-> val.
+Coercion val_nat : nat >-> val.
 
-Definition state : Type := partial_map (list nat) * (partial_map nat).
-
-Definition update_n (st: state) X v := (fst st, t_update (snd st) X v).
-Definition update_l (st: state) X v := (t_update (fst st) X v, snd st).
-Definition remove_n (st: state) X := (fst st, remove (snd st) X).
-Definition remove_l (st: state) X := (remove (fst st) X, snd st).
-
-Lemma update_after_remove_n (st: state) x :
-  update_n (remove_n st x) x ((snd st) x) = st.
-Admitted.
-
-Lemma update_after_remove_l (st: state) x :
-  update_l (remove_l st x) x ((fst st) x) = st.
-Admitted.
-
-Fixpoint neval (st : state) (n : nexp) : option nat :=
-  match n with
-  | Num n => Some n
-  | Hd l =>
-      match leval st l with
-      | Some (h :: _) => Some h
-      | _ => None
-      end
-  | Nid x => (snd st) x
+Fixpoint subst (y:string) (w:val) (t:trm) : trm :=
+  let aux t := subst y w t in
+  let if_y_eq x t1 t2 := if String.eqb x y then t1 else t2 in
+  match t with
+  | trm_val v => trm_val (subst_val y w v)
+  | trm_var x => if_y_eq x (trm_val w) t
+  | trm_app t1 t2 => trm_app (aux t1) (aux t2)
+  | trm_let x t1 t2 => trm_let x (aux t1) (if_y_eq x t2 (aux t2))
+  | trm_if t0 t1 t2 => trm_if (aux t0) (aux t1) (aux t2)
+  | trm_cons t0 t1 => trm_cons (aux t0) (aux t1)
+  | trm_match_list t0 t1 (p, q, t2) => trm_match_list (aux t0) (aux t1) (p, q, if_y_eq p t2 (if_y_eq q t2 (aux t2)))
+  | trm_tuple ts => trm_tuple (map aux ts)
   end
-with leval (st : state) (l : lexp) : option (list nat) :=
-       match l with
-       | NumList l => Some l
-       | Nil => Some []
-       | Cons h t =>
-           match neval st h, leval st t with
-           | Some h, Some t => Some (h :: t)
-           | _, _ => None
-           end
-       | Tail l =>
-           match leval st l with
-           | Some (_ :: t) => Some t
-           | _ => None
-           end
-       | Lid x => (fst st) x
-       end.
-
-Fixpoint beval (st : state) (b : bexp) : option bool :=
-  match b with
-  | BTrue       => Some true
-  | BFalse      => Some false
-  | Bemp a =>
-      match leval st a with
-      | Some ([]) => Some true
-      | Some (_) => Some false
-      | _ => None
-      end
-  | BEq a1 a2   =>
-      match (neval st a1), (neval st a2) with
-      | Some a1, Some a2 => Some (beq_nat a1 a2)
-      | _, _ => None
-      end
-  | BLt a1 a2   =>
-      match (neval st a1), (neval st a2) with
-      | Some a1, Some a2 => Some (Nat.ltb a1 a2)
-      | _, _ => None
-      end
-  | BNot b1     =>
-      match beval st b1 with
-      | Some b1 => Some (negb b1)
-      | None => None
-      end
-  | BAnd b1 b2  =>
-      match beval st b1 , beval st b2 with
-      | Some b1, Some b2 => Some (andb b1 b2)
-      | _, _ => None
-      end
+with subst_val (y:string) (w:val) (t:val) : val :=
+  let aux t := subst_val y w t in
+  let if_y_eq x t1 t2 := if String.eqb x y then t1 else t2 in
+  match t with
+  | val_bool _ | val_nat _ | val_listnat _ => t
+  | val_fun x t1 => val_fun x (if_y_eq x t1 (subst y w t1))
+  | val_fix f x t1 => val_fix f x (if_y_eq f t1 (if_y_eq x t1 (subst y w t1)))
+  | val_tuple ts => val_tuple (map aux ts)
   end.
+
+Implicit Types b : bool.
+Implicit Types v r : val.
+Implicit Types t : trm.
+Coercion trm_val : val >-> trm.
+Coercion trm_var : string >-> trm.
+Coercion trm_app : trm >-> Funclass.
+
+Inductive eval : trm -> val -> Prop :=
+| eval_val : forall v, eval (trm_val v) v
+| eval_fun : forall x body, eval (trm_val (val_fun x body)) (val_fun x body)
+| eval_fix : forall f x body, eval (trm_val (val_fix f x body)) (val_fix f x body)
+| eval_tuple_nil : eval (trm_tuple nil) (val_tuple nil)
+| eval_tuple_cons : forall t1 (t2: list trm) v1 (v2: list val),
+  eval t1 v1 ->
+  eval (trm_tuple t2) (val_tuple v2) ->
+  eval (trm_tuple (t1::t2)) (val_tuple (v1::v2))
+| eval_app_fun : forall f v2 x t1 t2 v,
+      eval f (val_fun x t1) ->
+      eval t2 v2 ->
+      eval (subst x v2 t1) v ->
+      eval (trm_app f t2) v
+| eval_app_fix : forall fixf v2 f x t1 t2 v,
+    eval fixf (val_fix f x t1) ->
+    eval t2 v2 ->
+    eval (subst x v2 (subst f (val_fix f x t1) t1)) v ->
+    eval (trm_app fixf t2) v
+| eval_let : forall x t1 t2 v1 r,
+    eval t1 v1 ->
+    eval (subst x v1 t2) r ->
+    eval (trm_let x t1 t2) r
+| eval_if : forall b v t1 t2,
+    eval (if b then t1 else t2) v ->
+    eval (trm_if (val_bool b) t1 t2) v
+| eval_cons : forall t1 t2 (v1: nat) (v2: list nat),
+    eval t1 (val_nat v1) ->
+    eval t2 (val_listnat v2) ->
+    eval (trm_cons t1 t2) (val_listnat (v1 :: v2))
+| eval_match_list : forall (x1 x2: string) (l: list nat) t1 t2 v,
+    eval
+      (match l with
+       | nil => t1
+       | v1 :: v2 =>
+           trm_let x1 (val_nat v1) (trm_let x2 (val_listnat v2) t2)
+       end) v ->
+    eval (trm_match_list (val_listnat l) t1 (x1, x2, t2)) v.
+
+Hint Constructors eval.
+
+Inductive tp: Type :=
+| tp_nat: (nat -> Prop) -> tp
+| tp_listnat: (list nat -> Prop) -> tp
+| tp_arrow: tp -> tp -> tp.
+
+Definition context := partial_map tp.
+
+Inductive has_type_val: context -> val -> tp -> Prop :=
+| t_nat: forall m n, has_type_val m (val_nat n) (tp_nat (fun x => x = n))
+| t_listnat: forall m l, has_type_val m (val_listnat l) (tp_listnat (fun x => x = l))
+| t_fun: forall m x body (in_tp out_tp: tp),
+    has_type_trm (m & {x --> Some in_tp}) body out_tp ->
+    has_type_val m (val_fun x body) (tp_arrow in_tp out_tp)
+| t_fix: forall m f x body (in_tp out_tp: tp),
+    has_type_trm (m & {x --> Some in_tp} & {f --> Some (tp_arrow in_tp out_tp)}) body out_tp ->
+    has_type_val m (val_fix f x body) (tp_arrow in_tp out_tp)
+with has_type_trm: context -> trm -> tp -> Prop :=
+| t_val: forall m v tp, has_type_val m v tp -> has_type_trm m (trm_val v) tp
+| t_app : forall m f arg in_tp out_tp,
+    has_type_trm m arg in_tp ->
+    has_type_trm m f (tp_arrow in_tp out_tp) ->
+    has_type_trm m (trm_app f arg) out_tp
+| t_let : forall m x t1 t2 tp1 tp,
+    has_type_trm m t1 tp1 ->
+    has_type_trm (m & {x --> Some tp1}) t2 tp ->
+    has_type_trm m (trm_let x t1 t2) tp
+| t_cons : forall m t1 t2 p1 p2,
+    has_type_trm m t1 (tp_nat p1) ->
+    has_type_trm m t2 (tp_listnat p2) ->
+    has_type_trm m (trm_cons t1 t2)
+                 (tp_listnat
+                    (fun l => exists x y ,
+                         l = x::y /\ p1 x /\ p2 y
+                 ))
+| t_match_list_nil : forall m (x1 x2: string) t0 t1 t2 tp,
+    has_type_trm m t0 (tp_listnat (fun x => x = nil)) ->
+    has_type_trm m t1 tp ->
+    has_type_trm m (trm_match_list t0 t1 (x1, x2, t2)) tp
+| t_match_list_cons : forall m (x1 x2: string) t0 t1 t2 tp p,
+    has_type_trm m t0 (tp_listnat p) ->
+    has_type_trm
+      (m & {x1 --> Some (tp_nat (fun h => exists tt, p (h :: tt))); x2 --> Some (tp_listnat (fun tt => exists h, p (h :: tt )))}) t2 tp ->
+    has_type_trm m (trm_match_list t0 t1 (x1, x2, t2)) tp.
 
 Definition W : string := "W".
 Definition X : string := "X".
@@ -112,15 +155,282 @@ Definition S3 : string := "S3".
 Definition H : string := "H".
 Definition T : string := "T".
 Definition NU : string := "NU".
+Definition CONCAT : string := "CONCAT".
 
-(** ** Notations *)
+Definition concat_program :=
+  val_fix CONCAT S1 (
+            trm_match_list S1 (val_fun S2 S2)
+                           (H, T,
+                             trm_val (val_fun S2 (trm_cons H (CONCAT T S2)))
+                           )
+          ).
 
-Coercion Nid : string >-> nexp.
-Coercion Lid : string >-> lexp.
-Coercion Num : nat >-> nexp.
-Definition bool_to_bexp (b: bool) : bexp :=
-  if b then BTrue else BFalse.
-Coercion bool_to_bexp : bool >-> bexp.
+Lemma concat_example0 :
+  eval (concat_program (val_listnat []) (val_listnat [1;3])) (val_listnat [1;3]).
+Proof.
+  unfold concat_program.
+  eapply eval_app_fun with (x := S2); simpl; eauto.
+  - eapply eval_app_fix with (x := S1); simpl; eauto.
+    eapply eval_match_list; simpl; eauto.
+  - simpl; eauto.
+Qed.
+
+Lemma concat_example1 :
+  eval (concat_program (val_listnat [2]) (val_listnat [1;3])) (val_listnat [2;1;3]).
+Proof.
+  unfold concat_program.
+  eapply eval_app_fun with (x := S2); simpl; eauto.
+  - eapply eval_app_fix with (x := S1); simpl; eauto.
+    eapply eval_match_list; simpl; eauto.
+    eapply eval_let; simpl; auto.
+    eapply eval_let; simpl; auto.
+  - simpl.
+    eapply eval_cons; simpl; eauto.
+    fold concat_program.
+    apply concat_example0.
+Qed.
+
+Lemma concat_empty : forall s,
+    eval (concat_program (val_listnat []) (val_listnat s)) (val_listnat s).
+Proof.
+  unfold concat_program.
+  intros s.
+  eapply eval_app_fun with (x := S2); simpl; eauto.
+  - eapply eval_app_fix with (x := S1); simpl; eauto.
+    eapply eval_match_list; simpl; eauto.
+  - simpl; eauto.
+Qed.
+
+Definition hd (l : list nat) (x: nat) :=
+  match l with
+  | nil => false
+  | cons h t => Nat.eqb h x
+  end.
+
+Fixpoint mem (l : list nat) (x: nat) :=
+  match l with
+  | nil => false
+  | cons h t => (if Nat.eqb h x then true else mem t x)
+  end.
+
+Fixpoint order (l : list nat) (u v: nat) :=
+  match l with
+  | nil => false
+  | cons h t =>
+      if Nat.eqb u h then mem t v else order t u v
+  end.
+
+Lemma mem_then_exists_first (l: list nat) (u: nat) :
+  mem l u = true -> exists s1 s2, s1 ++ (u :: s2) = l /\ ~ (mem s1 u = true).
+Admitted.
+
+Lemma mem_concat (l1 l2: list nat) (u: nat) :
+  (mem l1 u = true \/ mem l2 u = true) -> mem (l1 ++ l2) u = true.
+Proof.
+  intros H.
+  destruct H.
+  + induction l1.
+    - intros. inversion H0.
+    - intros. simpl. simpl in H0. destruct (Nat.eqb a u).
+      auto. auto.
+  + induction l1.
+    - auto.
+    - simpl. destruct (Nat.eqb a u); auto.
+Qed.
+
+Lemma l1 (nu: list nat) :
+  (exists (u v: nat), hd nu u = true /\ mem nu v = true /\ v > u /\ (forall w, mem nu w = true -> (u >= w \/ v = w))) ->
+  exists s1 s2,
+    (forall (u v: nat), (hd s1 u = true /\ mem s1 v = true) -> u >= v) /\
+      (forall (u v: nat), (hd s2 u = true /\ mem s2 v = true) -> u >= v) /\ s1 ++ s2 = nu.
+Proof.
+  intro H.
+  destruct H as (u & v & H0 & H1 & H2 & H).
+  apply mem_then_exists_first in H1. destruct H1 as (s1 & s2 & Hconcat & HNmem).
+  exists s1, (v :: s2).
+  repeat split; auto.
+  + intros u' v' (H1' & H2').
+    assert (u' = u). { destruct s1. inversion H1'. inversion H1'. subst. inversion H0. apply Nat.eqb_eq in H3. apply Nat.eqb_eq in H4. subst. auto. } subst.
+    assert (mem (s1 ++ v :: s2) v' = true). apply mem_concat; auto.
+    apply H in H1. destruct H1; subst; auto. exfalso. auto.
+  + intros u' v' (H1' & H2').
+    assert (u' = v). { subst. inversion H1'.  apply Nat.eqb_eq in H3. auto. } subst.
+    assert (mem (s1 ++ v :: s2) v' = true). apply mem_concat; auto.
+    apply H in H1. destruct H1; subst; auto. lia.
+Qed.
+
+
+Definition under_pre0 (s1 s2: list nat): Prop :=
+  forall u, order s1 u u = false /\ order s2 u u = false /\ ~ (exists (v: nat), mem s1 v = true /\ mem s2 v = true).
+
+Definition under_post0 (nu: list nat): Prop := forall u, order nu u u = false.
+
+Lemma concat_under0 : forall nu,
+    under_post0 nu ->
+    exists s1 s2,
+      under_pre0 s1 s2 /\
+        eval (concat_program (val_listnat s1) (val_listnat s2)) (val_listnat nu).
+Proof.
+  unfold concat_program.
+  intros nu HQ.
+  exists nil, nu.
+  split.
+  + intros u. repeat (split; auto). intros H. inversion H. destruct H0. inversion H0.
+  + eapply eval_app_fun with (x := S2); simpl; eauto.
+    - eapply eval_app_fix with (x := S1); simpl; eauto.
+      eapply eval_match_list; simpl; eauto.
+    - simpl; auto.
+Qed.
+
+Definition under_pre1 (s1 s2: list nat): Prop :=
+  forall u, order s1 u u = false /\ order s2 u u = false /\ (exists (v: nat), mem s1 v = true /\ mem s2 v = true).
+
+Definition splitable (nu: list nat): Prop :=
+  exists s1 s2, nu = s1 ++ s2 /\ (forall u, order s1 u u = false) /\ (forall u, order s2 u u = false).
+
+Definition under_post1_precise (nu: list nat) : Prop := (exists u, order nu u u = true) /\ splitable nu.
+
+Definition under_post1_appr (nu: list nat): Prop :=
+  (exists u, order nu u u = true) /\
+    (exists w, forall (u v: nat),
+        (order nu u w = true /\ order nu v w = true /\ order nu u v = true -> ~ u = v) /\
+          (order nu w u = true /\ order nu w v = true /\ order nu u v = true -> ~ u = v) /\
+          (order nu w w = false)
+    ).
+
+Lemma unde_post1_appr_valid: forall nu, under_post1_appr nu -> under_post1_precise nu.
+Proof.
+Admitted.
+
+Lemma duplist_after_split_shared_same_elem: forall nu s1 s2,
+    (exists u, order nu u u = true) ->
+    (forall u, order s1 u u = false) ->
+    (forall u, order s2 u u = false) ->
+    nu = s1 ++ s2 ->
+    (exists u, mem s1 u = true /\ mem s2 u = true).
+Proof. Admitted.
+
+Lemma concat_under1 : forall nu,
+    under_post1_precise nu ->
+    exists s1 s2,
+      under_pre1 s1 s2 /\
+        eval (concat_program (val_listnat s1) (val_listnat s2)) (val_listnat nu).
+Proof.
+  unfold concat_program.
+  intros nu HQ.
+  destruct HQ as (HQ & (s1 & s2 & Hconcat & Hs1 & Hs2)).
+  { exists s1, s2.
+    assert (under_pre1 s1 s2).
+    { intros u. repeat (split; auto). eapply duplist_after_split_shared_same_elem; auto. destruct HQ as (v & HQ). exists v. rewrite Hconcat in HQ. auto. }
+    split; subst; auto.
+    induction s1.
+    + unfold under_pre1 in H0. destruct (H0 0) as (_ & _ & (v & H & _ )). inversion H.
+    + eapply eval_app_fun with (x := S2)
+                               (t1 := (trm_cons a
+                                                (val_fix CONCAT S1 (trm_match_list S1 (val_fun S2 S2)
+                                                                                   (H, T, trm_val (val_fun S2 (trm_cons H (CONCAT T S2)))))
+                                                       (val_listnat s1) S2))); simpl; eauto.
+  - eapply eval_app_fix with (x := S1); simpl; eauto.
+    eapply eval_match_list; simpl; eauto.
+      eapply eval_let; simpl; auto.
+      eapply eval_let; simpl; auto.
+  - eapply eval_cons. simpl; eauto.
+    assert ((exists dup, order (s1 ++ s2) dup dup = true) \/ (forall dup, order (s1 ++ s2) dup dup = false)). admit.
+    assert ((mem (s1 ++ s2) a) = true \/ (mem (s1 ++ s2) a) = false). admit.
+    destruct H1, H2.
+    { apply IHs1; auto. admit. admit. }
+    { admit. }
+    { apply concat_under0 in H2.
+
+    { assert ((exists dup, order (s1 ++ s2) dup dup = true) \/ (forall dup, order (s1 ++ s2) dup dup = false)). admit.
+      destruct H1.
+      + apply IHs1; auto. admit. admit.
+      + apply concat_under0 in H1.
+    assert ((exists dup, order (s1 ++ s2) dup dup = true) \/ (forall dup, order (s1 ++ s2) dup dup = false)). admit.
+    destruct H1.
+    { apply IHs1; auto. admit. admit. }
+    { assert (under_post0 (s1++s2)). auto.
+      apply concat_under0 in H2.
+
+          destruct (mem (s1 ++ s2) a).
+    apply IHs1; auto. admit. admit.
+    destruct (mem (s1 ++ s2) a).
+
+
+    fold concat_program.
+    apply concat_example0.
+      { inversion Hs1.
+      induction s1.
+    - simpl; auto.
+
+
+
+  induction s1.
+  { simpl in Hconcat. subst. destruct HQ as (x & HQ). rewrite (Hs2 x) in HQ. inversion HQ. }
+  { destruct nu. inversion Hconcat.
+    inversion Hconcat; subst.
+    exists s1, s2.
+    assert (under_pre1 s1 s2).
+    { intros u. repeat (split; auto). admit. eapply duplist_after_split_shared_same_elem; auto. destruct HQ as (v & HQ). exists v. rewrite Hconcat in HQ. auto. admit. admit. }
+    split; subst; auto.
+    destruct s1.
+    + unfold under_pre1 in H0. destruct (H0 0) as (_ & _ & (v & H & _ )). inversion H.
+    + eapply eval_app_fun with (x := S2)
+                               (t1 := (trm_cons a
+                                                (val_fix CONCAT S1 (trm_match_list S1 (val_fun S2 S2)
+                                                                                   (H, T, trm_val (val_fun S2 (trm_cons H (CONCAT T S2)))))
+                                                         (val_listnat s1) S2))); simpl; eauto.
+    - eapply eval_app_fix with (x := S1); simpl; eauto.
+      eapply eval_match_list; simpl; eauto.
+      eapply eval_let; simpl; auto.
+      eapply eval_let; simpl; auto.
+    - simpl. inversion Hconcat; subst.
+      eapply eval_cons. simpl; eauto.
+
+
+  }
+
+
+  induction nu.
+  destruct nu. inversion HQ. inversion H0.
+  assert ((exists dup, order nu dup dup = true) \/ (forall dup, order nu dup dup = false)). admit.
+  { exists s1, s2.
+    assert (under_pre1 s1 s2).
+    { intros u. repeat (split; auto). eapply duplist_after_split_shared_same_elem; auto. destruct HQ as (v & HQ). exists v. rewrite Hconcat in HQ. auto. }
+    split; subst; auto.
+    induction s1.
+  + unfold under_pre1 in H1. destruct (H1 0) as (_ & _ & (v & H & _ )). inversion H.
+  + eapply eval_app_fun with (x := S2)
+                             (t1 := (trm_cons a
+                                              (val_fix CONCAT S1 (trm_match_list S1 (val_fun S2 S2)
+                                                                                 (H, T, trm_val (val_fun S2 (trm_cons H (CONCAT T S2)))))
+                                                       (val_listnat s1) S2))); simpl; eauto.
+  - eapply eval_app_fix with (x := S1); simpl; eauto.
+    eapply eval_match_list; simpl; eauto.
+      eapply eval_let; simpl; auto.
+      eapply eval_let; simpl; auto.
+  - simpl. inversion Hconcat; subst.
+    eapply eval_cons. simpl; eauto.
+    apply IHs1; auto.
+    assert ((exists dup, order (s1 ++ s2) dup dup = true) \/ (forall dup, order (s1 ++ s2) dup dup = false)). admit.
+    destruct H1.
+    { apply IHs1; auto. admit. admit. }
+    { assert (under_post0 (s1++s2)). auto.
+      apply concat_under0 in H2.
+
+
+    fold concat_program.
+    apply concat_example0.
+      { inversion Hs1.
+      induction s1.
+    - simpl; auto.
+Qed.
+
+
+Definition type_safe (c: trm) (tp: val -> Prop) := forall v, tp v -> eval c v.
+
+Inductive under_type: Type :=
+| ut_spec: forall (P: Prop) (Q: Prop) 
 
 Bind Scope lexp_scope with lexp.
 Infix ":::" := Cons (at level 50, left associativity) : lexp_scope.
